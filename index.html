@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cronòmetre Pro Sync</title>
+  <title>Cronòmetre Pro Sync Absoluta</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -45,7 +45,7 @@
 </head>
 <body>
 
-  <h1>Cronòmetre de Cursa (Sync 10s)</h1>
+  <h1>Cronòmetre de Cursa (Audio Sync)</h1>
   <canvas id="canvas" width="640" height="480"></canvas>
 
   <div class="controls">
@@ -72,31 +72,21 @@
     let isRacing = false;
 
     const finishLineX = 320; // Línia visual d'arribada
-    let audioCtx = null;
 
-    // Generador de tons d'àudio instantanis (Zero retard)
-    function playBeep(freq, duration, type = 'sine') {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = type;
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      
-      if (type === 'sawtooth') {
-        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
-      }
+    // Precàrrega d'àudios a la memòria RAM per a zero retard
+    const audioReady = new Audio('https://actions.google.com/sounds/v1/human_voices/ready.ogg');
+    const audioSet = new Audio('https://actions.google.com/sounds/v1/human_voices/set.ogg');
+    const audioGo = new Audio('https://actions.google.com/sounds/v1/emergency/beeps_high_pitch.ogg');
 
-      gain.gain.setValueAtTime(1, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
-      
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + duration);
+    function preloadAudios() {
+      audioReady.load();
+      audioSet.load();
+      audioGo.load();
     }
 
     // Inicialitzar la càmera frontal
     async function initCamera() {
+      preloadAudios();
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
@@ -114,7 +104,7 @@
       // 1. Dibuixar imatge de la càmera
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
-      // 2. Dibuixar línia de meta (només visual)
+      // 2. Dibuixar línia de meta (visual)
       ctx.strokeStyle = "#FF0000";
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -148,7 +138,8 @@
     }
 
     startBtn.addEventListener('click', () => {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // Forçar activació d'àudio per la gestió de permisos del mòbil
+      audioReady.play().then(() => audioReady.pause());
       
       startBtn.disabled = true;
       stopBtn.disabled = false;
@@ -173,28 +164,31 @@
     }
 
     function triggerProStart() {
-      // READY (Pitido mitjà)
+      // 1. READY (Text i Veu exactament a la vegada)
       statusText = "READY";
-      playBeep(523.25, 0.3); // Nota C5
+      audioReady.currentTime = 0;
+      audioReady.play();
 
       setTimeout(() => {
-        // SET (Pitido alt) 5 segons després
+        // 2. SET (Text i Veu exactament a la vegada desprès de 5s)
         statusText = "SET";
-        playBeep(659.25, 0.3); // Nota E5
+        audioSet.currentTime = 0;
+        audioSet.play();
 
         const randomDelay = Math.random() * 2000 + 1000; // Entre 1s i 3s
 
         setTimeout(() => {
-          // GO! (Pistolada + Inici del cronòmetre + Gravació)
-          playBeep(220, 0.4, 'sawtooth'); 
+          // 3. GO! (So + Text + Cronòmetre + Gravació 100% Simultanis)
+          audioGo.currentTime = 0;
+          audioGo.play();
+          
           raceStartTime = performance.now();
           isRacing = true;
           statusText = "GO!";
 
-          // Començar a gravar exactament al GO
           startRecording();
 
-          // Aturar la gravació automàticament passats 10 segons
+          // S'atura automàticament passats 10 segons
           setTimeout(() => {
             stopRace();
           }, 10000);
