@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cronòmetre Pro - Detecció de Tors</title>
+  <title>Cronòmetre Pro - Detecció de Tors Sync</title>
   
-  <!-- Llibreries oficials de MediaPipe per a detecció de postura -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
 
@@ -55,7 +54,7 @@
 
   <div class="controls">
     <button id="startBtn">INICIAR PREPARACIÓ</button>
-    <button id="stopBtn" disabled>ATURAR MANUAL</button>
+    <button id="stopBtn" disabled>ATURAR</button>
   </div>
 
   <script>
@@ -72,33 +71,35 @@
     let prepTimer = 30;
     let raceStartTime = 0;
     let elapsedTime = "00:00.00";
+    let officialTime = null; // Guardar la marca d'arribada
     let isRacing = false;
     let raceFinished = false;
 
-    const finishLineX = 320; // Línia de meta al centre
+    const finishLineX = 320; 
+    let audioCtx = null;
 
-    function speak(text) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-US';
-      window.speechSynthesis.speak(utterance);
-    }
+    // Generador de tons d'àudio ultra-ràpids per evitar retards de veu
+    function playBeep(freq, duration, type = 'sine') {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      
+      if (type === 'sawtooth') {
+        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+      }
 
-    function playGunshot() {
-      const ctxAudio = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctxAudio.createOscillator();
-      const gain = ctxAudio.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(300, ctxAudio.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(0.01, ctxAudio.currentTime + 0.3);
-      gain.gain.setValueAtTime(1, ctxAudio.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctxAudio.currentTime + 0.3);
+      gain.gain.setValueAtTime(1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+      
       osc.connect(gain);
-      gain.connect(ctxAudio.destination);
+      gain.connect(audioCtx.destination);
       osc.start();
-      osc.stop(ctxAudio.currentTime + 0.3);
+      osc.stop(audioCtx.currentTime + duration);
     }
 
-    // Configuració de MediaPipe Pose
+    // Configuració de MediaPipe
     const pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -113,44 +114,42 @@
     pose.onResults(onResults);
 
     function onResults(results) {
-      // 1. Dibuixar la càmera
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-      // 2. Dibuixar línia de meta
-      ctx.strokeStyle = raceFinished ? "#00FF00" : "#FF0000";
+      // Línia de Meta
+      ctx.strokeStyle = officialTime ? "#00FF00" : "#FF0000";
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(finishLineX, 0);
       ctx.lineTo(finishLineX, canvas.height);
       ctx.stroke();
 
-      // 3. Detecció de Tors (Espatlles)
-      if (results.poseLandmarks && isRacing && !raceFinished) {
+      // Detecció del Tors
+      if (results.poseLandmarks && isRacing && !officialTime) {
         const leftShoulder = results.poseLandmarks[11];
         const rightShoulder = results.poseLandmarks[12];
 
         if (leftShoulder && rightShoulder) {
-          // X central del tors
           const torsoX = ((leftShoulder.x + rightShoulder.x) / 2) * canvas.width;
           const torsoY = ((leftShoulder.y + rightShoulder.y) / 2) * canvas.height;
 
-          // Dibuixar indicador visual al tors
           ctx.fillStyle = "#FFFF00";
           ctx.beginPath();
           ctx.arc(torsoX, torsoY, 8, 0, 2 * Math.PI);
           ctx.fill();
 
-          // Verificar si el tors creua la línia vertical de meta
+          // Creuar la línia
           if (torsoX >= finishLineX - 10 && torsoX <= finishLineX + 10) {
-            finishRace();
+            officialTime = elapsedTime; // Congelar MARCA
+            statusText = "META ASSOLIDA!";
           }
         }
       }
 
-      // 4. Actualitzar cronòmetre
-      if (isRacing && !raceFinished) {
+      // El cronòmetre SEMPRE segueix comptant si la cursa està activa
+      if (isRacing) {
         const now = performance.now();
         const diff = new Date(now - raceStartTime);
         const m = String(diff.getUTCMinutes()).padStart(2, '0');
@@ -159,22 +158,29 @@
         elapsedTime = `${m}:${s}.${ms}`;
       }
 
-      // 5. Interfície de text
+      // Panell d'Informació
       ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-      ctx.fillRect(10, 10, 280, 75);
+      ctx.fillRect(10, 10, 310, officialTime ? 100 : 75);
 
       ctx.fillStyle = "#FFD700";
       ctx.font = "bold 18px Arial";
       ctx.fillText(statusText, 20, 35);
 
+      // Temps en directe (segueix corrent)
       ctx.fillStyle = "#00FF00";
-      ctx.font = "bold 28px monospace";
-      ctx.fillText(elapsedTime, 20, 70);
+      ctx.font = "bold 26px monospace";
+      ctx.fillText(`TEMPS: ${elapsedTime}`, 20, 68);
+
+      // Si s'ha creuat la línia, mostra la MARCA OFICIAL al costat/a baix
+      if (officialTime) {
+        ctx.fillStyle = "#00E5FF";
+        ctx.font = "bold 20px monospace";
+        ctx.fillText(`MARCA: ${officialTime}`, 20, 95);
+      }
 
       ctx.restore();
     }
 
-    // Inicialitzar la càmera frontal
     const camera = new Camera(videoElement, {
       onFrame: async () => {
         await pose.send({ image: videoElement });
@@ -185,24 +191,10 @@
     });
     camera.start();
 
-    function finishRace() {
-      isRacing = false;
-      raceFinished = true;
-      statusText = "META! Tors detectat";
-
-      setTimeout(() => {
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-          mediaRecorder.stop();
-        }
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-      }, 3000);
-    }
-
     startBtn.addEventListener('click', () => {
       startBtn.disabled = true;
       stopBtn.disabled = false;
-      raceFinished = false;
+      officialTime = null;
       recordedChunks = [];
       elapsedTime = "00:00.00";
 
@@ -230,17 +222,20 @@
     }
 
     function triggerProStart() {
+      // READY -> Tò greu sincronitzat
       statusText = "READY";
-      speak("Ready");
+      playBeep(440, 0.4); 
 
       setTimeout(() => {
+        // SET -> Tò agut sincronitzat (5 segons després)
         statusText = "SET";
-        speak("Set");
+        playBeep(600, 0.4); 
 
-        const randomDelay = Math.random() * 2000 + 1000;
+        const randomDelay = Math.random() * 2000 + 1000; // Entre 1s i 3s
 
         setTimeout(() => {
-          playGunshot();
+          // GO! -> Pistolada i cronòmetre sincronitzats al mateix instant
+          playBeep(250, 0.3, 'sawtooth'); 
           statusText = "GO!";
           raceStartTime = performance.now();
           isRacing = true;
@@ -249,7 +244,15 @@
       }, 5000);
     }
 
-    stopBtn.addEventListener('click', finishRace);
+    stopBtn.addEventListener('click', () => {
+      isRacing = false;
+      statusText = "Finalitzat";
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    });
 
     function saveVideo() {
       const blob = new Blob(recordedChunks, { type: 'video/webm' });
