@@ -3,11 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cronòmetre Pro - Sync Absoluta</title>
-  
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
-
+  <title>Cronòmetre Pro Sync</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -49,12 +45,12 @@
 </head>
 <body>
 
-  <h1>Cronòmetre Pro (Sync Absoluta)</h1>
+  <h1>Cronòmetre de Cursa (Sync 10s)</h1>
   <canvas id="canvas" width="640" height="480"></canvas>
 
   <div class="controls">
     <button id="startBtn">INICIAR PREPARACIÓ</button>
-    <button id="stopBtn" disabled>ATURAR</button>
+    <button id="stopBtn" disabled>ATURAR MANUAL</button>
   </div>
 
   <script>
@@ -63,94 +59,70 @@
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
 
+    let videoElement = document.createElement('video');
+    videoElement.playsInline = true;
+
     let mediaRecorder;
     let recordedChunks = [];
-    let videoElement = document.createElement('video');
 
     let statusText = "A punt";
     let prepTimer = 30;
     let raceStartTime = 0;
     let elapsedTime = "00:00.00";
-    let officialTime = null; 
     let isRacing = false;
 
-    const finishLineX = 320; 
+    const finishLineX = 320; // Línia visual d'arribada
     let audioCtx = null;
 
-    // Precàrrega de la veu per eliminar tot retard
-    function speakSync(text) {
-      if (!('speechSynthesis' in window)) return;
-      window.speechSynthesis.cancel(); // Neteja cues anteriors
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-US';
-      utterance.rate = 1.2; // Veu més ràpida i directa
-      window.speechSynthesis.speak(utterance);
-    }
-
-    function playGunshot() {
+    // Generador de tons d'àudio instantanis (Zero retard)
+    function playBeep(freq, duration, type = 'sine') {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(300, audioCtx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      
+      if (type === 'sawtooth') {
+        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+      }
+
       gain.gain.setValueAtTime(1, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+      
       osc.connect(gain);
       gain.connect(audioCtx.destination);
       osc.start();
-      osc.stop(audioCtx.currentTime + 0.3);
+      osc.stop(audioCtx.currentTime + duration);
     }
 
-    // MediaPipe Pose
-    const pose = new Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-    });
+    // Inicialitzar la càmera frontal
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: true
+        });
+        videoElement.srcObject = stream;
+        videoElement.play();
+        requestAnimationFrame(drawCanvas);
+      } catch (err) {
+        alert("Error en accedir a la càmera: " + err.message);
+      }
+    }
 
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
+    function drawCanvas() {
+      // 1. Dibuixar imatge de la càmera
+      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
-    pose.onResults(onResults);
-
-    function onResults(results) {
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      // Meta
-      ctx.strokeStyle = officialTime ? "#00FF00" : "#FF0000";
+      // 2. Dibuixar línia de meta (només visual)
+      ctx.strokeStyle = "#FF0000";
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(finishLineX, 0);
       ctx.lineTo(finishLineX, canvas.height);
       ctx.stroke();
 
-      // Detecció Tors
-      if (results.poseLandmarks && isRacing && !officialTime) {
-        const leftShoulder = results.poseLandmarks[11];
-        const rightShoulder = results.poseLandmarks[12];
-
-        if (leftShoulder && rightShoulder) {
-          const torsoX = ((leftShoulder.x + rightShoulder.x) / 2) * canvas.width;
-          const torsoY = ((leftShoulder.y + rightShoulder.y) / 2) * canvas.height;
-
-          ctx.fillStyle = "#FFFF00";
-          ctx.beginPath();
-          ctx.arc(torsoX, torsoY, 8, 0, 2 * Math.PI);
-          ctx.fill();
-
-          if (torsoX >= finishLineX - 10 && torsoX <= finishLineX + 10) {
-            officialTime = elapsedTime; // Congela la MARCA
-            statusText = "META ASSOLIDA!";
-          }
-        }
-      }
-
-      // Cronòmetre continu
+      // 3. Cronòmetre
       if (isRacing) {
         const now = performance.now();
         const diff = new Date(now - raceStartTime);
@@ -160,9 +132,9 @@
         elapsedTime = `${m}:${s}.${ms}`;
       }
 
-      // Interfície
+      // 4. Interfície de text
       ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-      ctx.fillRect(10, 10, 310, officialTime ? 100 : 75);
+      ctx.fillRect(10, 10, 310, 75);
 
       ctx.fillStyle = "#FFD700";
       ctx.font = "bold 18px Arial";
@@ -172,40 +144,16 @@
       ctx.font = "bold 26px monospace";
       ctx.fillText(`TEMPS: ${elapsedTime}`, 20, 68);
 
-      if (officialTime) {
-        ctx.fillStyle = "#00E5FF";
-        ctx.font = "bold 20px monospace";
-        ctx.fillText(`MARCA: ${officialTime}`, 20, 95);
-      }
-
-      ctx.restore();
+      requestAnimationFrame(drawCanvas);
     }
 
-    const camera = new Camera(videoElement, {
-      onFrame: async () => {
-        await pose.send({ image: videoElement });
-      },
-      width: 640,
-      height: 480,
-      facingMode: 'user'
-    });
-    camera.start();
-
     startBtn.addEventListener('click', () => {
-      // Inicialitza l'àudio amb la interacció de l'usuari
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       
       startBtn.disabled = true;
       stopBtn.disabled = false;
-      officialTime = null;
       recordedChunks = [];
       elapsedTime = "00:00.00";
-
-      const canvasStream = canvas.captureStream(30);
-      mediaRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm' });
-      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
-      mediaRecorder.onstop = saveVideo;
-      mediaRecorder.start();
 
       startPreparation();
     });
@@ -225,37 +173,56 @@
     }
 
     function triggerProStart() {
-      // 1. READY: Text + Veu instantània
+      // READY (Pitido mitjà)
       statusText = "READY";
-      speakSync("Ready");
+      playBeep(523.25, 0.3); // Nota C5
 
       setTimeout(() => {
-        // 2. SET: Text + Veu instantània (exactament 5s després)
+        // SET (Pitido alt) 5 segons després
         statusText = "SET";
-        speakSync("Set");
+        playBeep(659.25, 0.3); // Nota E5
 
-        const randomDelay = Math.random() * 2000 + 1000; // 1s a 3s aleatori
+        const randomDelay = Math.random() * 2000 + 1000; // Entre 1s i 3s
 
         setTimeout(() => {
-          // 3. GO: Pistolada + Inici del Cronòmetre exactament al mateix aliti
-          playGunshot();
+          // GO! (Pistolada + Inici del cronòmetre + Gravació)
+          playBeep(220, 0.4, 'sawtooth'); 
           raceStartTime = performance.now();
           isRacing = true;
           statusText = "GO!";
+
+          // Començar a gravar exactament al GO
+          startRecording();
+
+          // Aturar la gravació automàticament passats 10 segons
+          setTimeout(() => {
+            stopRace();
+          }, 10000);
+
         }, randomDelay);
 
       }, 5000);
     }
 
-    stopBtn.addEventListener('click', () => {
+    function startRecording() {
+      const canvasStream = canvas.captureStream(30);
+      mediaRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm' });
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = saveVideo;
+      mediaRecorder.start();
+    }
+
+    function stopRace() {
       isRacing = false;
-      statusText = "Finalitzat";
+      statusText = "Finalitzat (10s)";
       if (mediaRecorder && mediaRecorder.state === "recording") {
         mediaRecorder.stop();
       }
       startBtn.disabled = false;
       stopBtn.disabled = true;
-    });
+    }
+
+    stopBtn.addEventListener('click', stopRace);
 
     function saveVideo() {
       const blob = new Blob(recordedChunks, { type: 'video/webm' });
@@ -265,6 +232,8 @@
       a.download = `cursa_${Date.now()}.webm`;
       a.click();
     }
+
+    window.onload = initCamera;
   </script>
 </body>
 </html>
