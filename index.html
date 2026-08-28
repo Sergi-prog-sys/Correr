@@ -3,7 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cronòmetre d'Atletisme Pro</title>
+  <title>Cronòmetre Pro - Detecció de Tors</title>
+  
+  <!-- Llibreries oficials de MediaPipe per a detecció de postura -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -16,10 +21,10 @@
       min-height: 100vh;
       margin: 0;
     }
-    h1 { margin-bottom: 10px; font-size: 1.5rem; }
+    h1 { margin-bottom: 5px; font-size: 1.2rem; }
     #canvas {
-      width: 90%;
-      max-width: 400px;
+      width: 95%;
+      max-width: 500px;
       border-radius: 12px;
       background: #000;
       box-shadow: 0 4px 10px rgba(0,0,0,0.5);
@@ -40,17 +45,17 @@
     }
     #startBtn { background-color: #28a745; }
     #stopBtn { background-color: #dc3545; }
-    #startBtn:disabled, #stopBtn:disabled { background-color: #555; cursor: not-allowed; }
+    button:disabled { background-color: #555; cursor: not-allowed; }
   </style>
 </head>
 <body>
 
-  <h1>Cronòmetre de Cursa Pro</h1>
+  <h1>Cronòmetre Pro (Detecció de Tors)</h1>
   <canvas id="canvas" width="640" height="480"></canvas>
 
   <div class="controls">
     <button id="startBtn">INICIAR PREPARACIÓ</button>
-    <button id="stopBtn" disabled>ATURAR</button>
+    <button id="stopBtn" disabled>ATURAR MANUAL</button>
   </div>
 
   <script>
@@ -59,24 +64,22 @@
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
 
-    let videoStream, mediaRecorder;
+    let mediaRecorder;
     let recordedChunks = [];
     let videoElement = document.createElement('video');
-    videoElement.playsInline = true;
 
-    // Estat de la cursa
     let statusText = "A punt";
     let prepTimer = 30;
     let raceStartTime = 0;
     let elapsedTime = "00:00.00";
-    let isRunning = false;
     let isRacing = false;
+    let raceFinished = false;
 
-    // Síntesi de veu per a "Ready" i "Set", i beep per a "Go"
+    const finishLineX = 320; // Línia de meta al centre
+
     function speak(text) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'en-US';
-      utterance.rate = 1;
       window.speechSynthesis.speak(utterance);
     }
 
@@ -95,27 +98,59 @@
       osc.stop(ctxAudio.currentTime + 0.3);
     }
 
-    // Inicialitzar càmera frontal (facingMode: "user")
-    async function initCamera() {
-      try {
-        videoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: true
-        });
-        videoElement.srcObject = videoStream;
-        videoElement.play();
-        requestAnimationFrame(drawCanvas);
-      } catch (err) {
-        alert("Error en accedir a la càmera frontal: " + err.message);
+    // Configuració de MediaPipe Pose
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    pose.onResults(onResults);
+
+    function onResults(results) {
+      // 1. Dibuixar la càmera
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      // 2. Dibuixar línia de meta
+      ctx.strokeStyle = raceFinished ? "#00FF00" : "#FF0000";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(finishLineX, 0);
+      ctx.lineTo(finishLineX, canvas.height);
+      ctx.stroke();
+
+      // 3. Detecció de Tors (Espatlles)
+      if (results.poseLandmarks && isRacing && !raceFinished) {
+        const leftShoulder = results.poseLandmarks[11];
+        const rightShoulder = results.poseLandmarks[12];
+
+        if (leftShoulder && rightShoulder) {
+          // X central del tors
+          const torsoX = ((leftShoulder.x + rightShoulder.x) / 2) * canvas.width;
+          const torsoY = ((leftShoulder.y + rightShoulder.y) / 2) * canvas.height;
+
+          // Dibuixar indicador visual al tors
+          ctx.fillStyle = "#FFFF00";
+          ctx.beginPath();
+          ctx.arc(torsoX, torsoY, 8, 0, 2 * Math.PI);
+          ctx.fill();
+
+          // Verificar si el tors creua la línia vertical de meta
+          if (torsoX >= finishLineX - 10 && torsoX <= finishLineX + 10) {
+            finishRace();
+          }
+        }
       }
-    }
 
-    // Dibuixar la càmera i el cronòmetre al canvas
-    function drawCanvas() {
-      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-
-      // Calcular temps de cursa si ha començat
-      if (isRacing) {
+      // 4. Actualitzar cronòmetre
+      if (isRacing && !raceFinished) {
         const now = performance.now();
         const diff = new Date(now - raceStartTime);
         const m = String(diff.getUTCMinutes()).padStart(2, '0');
@@ -124,35 +159,54 @@
         elapsedTime = `${m}:${s}.${ms}`;
       }
 
-      // Caixeta per al text
+      // 5. Interfície de text
       ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-      ctx.fillRect(10, 10, 280, 70);
+      ctx.fillRect(10, 10, 280, 75);
 
-      // Dibuixar Estat/Compte enrere
       ctx.fillStyle = "#FFD700";
-      ctx.font = "bold 20px Arial";
+      ctx.font = "bold 18px Arial";
       ctx.fillText(statusText, 20, 35);
 
-      // Dibuixar Cronòmetre
       ctx.fillStyle = "#00FF00";
       ctx.font = "bold 28px monospace";
-      ctx.fillText(elapsedTime, 20, 68);
+      ctx.fillText(elapsedTime, 20, 70);
 
-      requestAnimationFrame(drawCanvas);
+      ctx.restore();
     }
 
-    // Iniciar el procés
+    // Inicialitzar la càmera frontal
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await pose.send({ image: videoElement });
+      },
+      width: 640,
+      height: 480,
+      facingMode: 'user'
+    });
+    camera.start();
+
+    function finishRace() {
+      isRacing = false;
+      raceFinished = true;
+      statusText = "META! Tors detectat";
+
+      setTimeout(() => {
+        if (mediaRecorder && mediaRecorder.state === "recording") {
+          mediaRecorder.stop();
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }, 3000);
+    }
+
     startBtn.addEventListener('click', () => {
       startBtn.disabled = true;
       stopBtn.disabled = false;
+      raceFinished = false;
       recordedChunks = [];
+      elapsedTime = "00:00.00";
 
-      // Gravar el canvas (inclou imatge + overlay de text)
       const canvasStream = canvas.captureStream(30);
-      if (videoStream.getAudioTracks().length > 0) {
-        canvasStream.addTrack(videoStream.getAudioTracks()[0]);
-      }
-
       mediaRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm' });
       mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
       mediaRecorder.onstop = saveVideo;
@@ -163,7 +217,6 @@
 
     function startPreparation() {
       prepTimer = 30;
-      isRunning = true;
       statusText = `Preparació: ${prepTimer}s`;
 
       const interval = setInterval(() => {
@@ -177,20 +230,16 @@
     }
 
     function triggerProStart() {
-      // 1. READY
       statusText = "READY";
       speak("Ready");
 
-      // 2. Esperar 5 segons exactes per al SET
       setTimeout(() => {
         statusText = "SET";
         speak("Set");
 
-        // 3. Temps variable entre 1 i 3 segons per al GO
-        const randomDelay = Math.random() * 2000 + 1000; // 1000ms a 3000ms
+        const randomDelay = Math.random() * 2000 + 1000;
 
         setTimeout(() => {
-          // 4. GO!
           playGunshot();
           statusText = "GO!";
           raceStartTime = performance.now();
@@ -200,14 +249,7 @@
       }, 5000);
     }
 
-    // Aturar i guardar vídeo
-    stopBtn.addEventListener('click', () => {
-      isRacing = false;
-      statusText = "Finalitzat";
-      mediaRecorder.stop();
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-    });
+    stopBtn.addEventListener('click', finishRace);
 
     function saveVideo() {
       const blob = new Blob(recordedChunks, { type: 'video/webm' });
@@ -217,8 +259,6 @@
       a.download = `cursa_${Date.now()}.webm`;
       a.click();
     }
-
-    window.onload = initCamera;
   </script>
 </body>
 </html>
