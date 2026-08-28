@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cronòmetre Pro - Detecció de Tors Sync</title>
+  <title>Cronòmetre Pro - Sync Absoluta</title>
   
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
@@ -49,7 +49,7 @@
 </head>
 <body>
 
-  <h1>Cronòmetre Pro (Detecció de Tors)</h1>
+  <h1>Cronòmetre Pro (Sync Absoluta)</h1>
   <canvas id="canvas" width="640" height="480"></canvas>
 
   <div class="controls">
@@ -71,35 +71,38 @@
     let prepTimer = 30;
     let raceStartTime = 0;
     let elapsedTime = "00:00.00";
-    let officialTime = null; // Guardar la marca d'arribada
+    let officialTime = null; 
     let isRacing = false;
-    let raceFinished = false;
 
     const finishLineX = 320; 
     let audioCtx = null;
 
-    // Generador de tons d'àudio ultra-ràpids per evitar retards de veu
-    function playBeep(freq, duration, type = 'sine') {
+    // Precàrrega de la veu per eliminar tot retard
+    function speakSync(text) {
+      if (!('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel(); // Neteja cues anteriors
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = 1.2; // Veu més ràpida i directa
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function playGunshot() {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-      osc.type = type;
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      
-      if (type === 'sawtooth') {
-        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
-      }
-
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
       gain.gain.setValueAtTime(1, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
-      
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
       osc.start();
-      osc.stop(audioCtx.currentTime + duration);
+      osc.stop(audioCtx.currentTime + 0.3);
     }
 
-    // Configuració de MediaPipe
+    // MediaPipe Pose
     const pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -118,7 +121,7 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-      // Línia de Meta
+      // Meta
       ctx.strokeStyle = officialTime ? "#00FF00" : "#FF0000";
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -126,7 +129,7 @@
       ctx.lineTo(finishLineX, canvas.height);
       ctx.stroke();
 
-      // Detecció del Tors
+      // Detecció Tors
       if (results.poseLandmarks && isRacing && !officialTime) {
         const leftShoulder = results.poseLandmarks[11];
         const rightShoulder = results.poseLandmarks[12];
@@ -140,15 +143,14 @@
           ctx.arc(torsoX, torsoY, 8, 0, 2 * Math.PI);
           ctx.fill();
 
-          // Creuar la línia
           if (torsoX >= finishLineX - 10 && torsoX <= finishLineX + 10) {
-            officialTime = elapsedTime; // Congelar MARCA
+            officialTime = elapsedTime; // Congela la MARCA
             statusText = "META ASSOLIDA!";
           }
         }
       }
 
-      // El cronòmetre SEMPRE segueix comptant si la cursa està activa
+      // Cronòmetre continu
       if (isRacing) {
         const now = performance.now();
         const diff = new Date(now - raceStartTime);
@@ -158,7 +160,7 @@
         elapsedTime = `${m}:${s}.${ms}`;
       }
 
-      // Panell d'Informació
+      // Interfície
       ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
       ctx.fillRect(10, 10, 310, officialTime ? 100 : 75);
 
@@ -166,12 +168,10 @@
       ctx.font = "bold 18px Arial";
       ctx.fillText(statusText, 20, 35);
 
-      // Temps en directe (segueix corrent)
       ctx.fillStyle = "#00FF00";
       ctx.font = "bold 26px monospace";
       ctx.fillText(`TEMPS: ${elapsedTime}`, 20, 68);
 
-      // Si s'ha creuat la línia, mostra la MARCA OFICIAL al costat/a baix
       if (officialTime) {
         ctx.fillStyle = "#00E5FF";
         ctx.font = "bold 20px monospace";
@@ -192,6 +192,9 @@
     camera.start();
 
     startBtn.addEventListener('click', () => {
+      // Inicialitza l'àudio amb la interacció de l'usuari
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
       startBtn.disabled = true;
       stopBtn.disabled = false;
       officialTime = null;
@@ -222,23 +225,23 @@
     }
 
     function triggerProStart() {
-      // READY -> Tò greu sincronitzat
+      // 1. READY: Text + Veu instantània
       statusText = "READY";
-      playBeep(440, 0.4); 
+      speakSync("Ready");
 
       setTimeout(() => {
-        // SET -> Tò agut sincronitzat (5 segons després)
+        // 2. SET: Text + Veu instantània (exactament 5s després)
         statusText = "SET";
-        playBeep(600, 0.4); 
+        speakSync("Set");
 
-        const randomDelay = Math.random() * 2000 + 1000; // Entre 1s i 3s
+        const randomDelay = Math.random() * 2000 + 1000; // 1s a 3s aleatori
 
         setTimeout(() => {
-          // GO! -> Pistolada i cronòmetre sincronitzats al mateix instant
-          playBeep(250, 0.3, 'sawtooth'); 
-          statusText = "GO!";
+          // 3. GO: Pistolada + Inici del Cronòmetre exactament al mateix aliti
+          playGunshot();
           raceStartTime = performance.now();
           isRacing = true;
+          statusText = "GO!";
         }, randomDelay);
 
       }, 5000);
