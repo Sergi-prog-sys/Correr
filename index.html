@@ -1,0 +1,159 @@
+
+
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cronòmetre Cursa Mòbil</title>
+    <style>
+        body { background: #111; color: white; text-align: center; font-family: sans-serif; margin: 0; padding: 10px; }
+        .container { position: relative; display: inline-block; width: 100%; max-width: 500px; }
+        video, canvas { width: 100%; height: auto; border-radius: 8px; display: block; }
+        canvas { position: absolute; top: 0; left: 0; }
+        #info { font-size: 1.5em; font-weight: bold; margin: 15px 0; color: #00ff00; }
+        button { padding: 12px 24px; font-size: 1.1em; font-weight: bold; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <h2>Cronòmetre Cursa</h2>
+    <div id="info">Prem "INICIAR" per començar</div>
+    
+    <div class="container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="canvasOut"></canvas>
+    </div>
+    <br><br>
+    <button id="btnStart" onclick="iniciarCursa()">INICIAR CURSA</button>
+
+<script>
+const video = document.getElementById('webcam');
+const canvas = document.getElementById('canvasOut');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+
+let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let mediaRecorder, recordedChunks = [];
+let prevFrame = null;
+let fase = "IDLE";
+let tempsIniciFase, tempsCronometreInici, tempsFinal;
+let esperaAleatoria = 0;
+
+// Configurar sons sintètics (Beeps)
+function ferBeep(freq, durada) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    let osc = audioCtx.createOscillator();
+    let gain = audioCtx.createGain();
+    osc.frequency.value = freq;
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    setTimeout(() => osc.stop(), durada);
+}
+
+// Obtenir accés a la càmera del mòbil
+navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
+    .then(stream => {
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            requestAnimationFrame(processarFotograma);
+        };
+    }).catch(err => alert("Error en obrir la càmera: " + err));
+
+function iniciarCursa() {
+    recordedChunks = [];
+    let stream = canvas.captureStream(30);
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = descarregarVideo;
+    mediaRecorder.start();
+
+    fase = "PREPARACIO";
+    tempsIniciFase = Date.now();
+    document.getElementById('btnStart').style.display = 'none';
+}
+
+function processarFotograma() {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    let width = canvas.width, height = canvas.height;
+    let liniaX = Math.floor(width / 2);
+    let ara = Date.now();
+
+    // Dibuixar línia de meta
+    ctx.strokeStyle = (tempsFinal) ? '#00ff00' : '#ff0000';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(liniaX, 0); ctx.lineTo(liniaX, height); ctx.stroke();
+
+    // Lògica de Fases i Sons
+    if (fase === "PREPARACIO") {
+        let restants = Math.ceil(5 - (ara - tempsIniciFase) / 1000);
+        info.innerText = `PREPARA'T: ${restants}s`;
+        info.style.color = "yellow";
+        if (restants <= 0) {
+            fase = "READY";
+            tempsIniciFase = Date.now();
+            ferBeep(440, 250); // Beep Ready
+        }
+    } else if (fase === "READY") {
+        info.innerText = "READY...";
+        info.style.color = "orange";
+        if ((ara - tempsIniciFase) > 3000) {
+            ferBeep(600, 250); // Beep Set
+            fase = "SET";
+            tempsIniciFase = Date.now();
+            esperaAleatoria = (Math.random() * 1.7 + 1.5) * 1000;
+        }
+    } else if (fase === "SET") {
+        info.innerText = "SET...";
+        if ((ara - tempsIniciFase) > esperaAleatoria) {
+            fase = "GO";
+            tempsCronometreInici = Date.now();
+            ferBeep(1200, 500); // Beep GO!
+        }
+    } else if (fase === "GO" || fase === "CORRENT") {
+        fase = "CORRENT";
+        let tempsCorregut = ((ara - tempsCronometreInici) / 1000).toFixed(2);
+        info.innerText = `Temps: ${tempsCorregut} s`;
+        info.style.color = "cyan";
+
+        // Detecció de moviment a la línia
+        let currentFrame = ctx.getImageData(liniaX - 10, 0, 20, height);
+        if (prevFrame && !tempsFinal) {
+            let moviment = 0;
+            for (let i = 0; i < currentFrame.data.length; i += 4) {
+                let diff = Math.abs(currentFrame.data[i] - prevFrame.data[i]);
+                if (diff > 40) moviment++;
+            }
+            if (moviment > 1500) { // Sensibilitat
+                tempsFinal = tempsCorregut;
+                ferBeep(1500, 300); // Beep Meta
+                setTimeout(() => {
+                    mediaRecorder.stop();
+                    fase = "FI";
+                }, 2000);
+            }
+        }
+        prevFrame = currentFrame;
+    } else if (fase === "FI") {
+        info.innerText = `MARCA META: ${tempsFinal} s`;
+        info.style.color = "#00ff00";
+    }
+
+    requestAnimationFrame(processarFotograma);
+}
+
+function descarregarVideo() {
+    let blob = new Blob(recordedChunks, { type: 'video/webm' });
+    let url = URL.createObjectURL(blob);
+    let a = document.createElement('a');
+    a.href = url;
+    a.download = `cursa_${Date.now()}.webm`;
+    a.click();
+    alert("Vídeo desat correctament al teu mòbil!");
+}
+</script>
+</body>
+</html>
