@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cronòmetre Pro Sync Absoluta</title>
+  <title>Cronòmetre de Cursa Pro</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -45,7 +45,7 @@
 </head>
 <body>
 
-  <h1>Cronòmetre de Cursa (Audio Sync)</h1>
+  <h1>Cronòmetre de Cursa (10s)</h1>
   <canvas id="canvas" width="640" height="480"></canvas>
 
   <div class="controls">
@@ -71,22 +71,31 @@
     let elapsedTime = "00:00.00";
     let isRacing = false;
 
-    const finishLineX = 320; // Línia visual d'arribada
+    const finishLineX = 320; // Línia visual vermella
+    let audioCtx = null;
 
-    // Precàrrega d'àudios a la memòria RAM per a zero retard
-    const audioReady = new Audio('https://actions.google.com/sounds/v1/human_voices/ready.ogg');
-    const audioSet = new Audio('https://actions.google.com/sounds/v1/human_voices/set.ogg');
-    const audioGo = new Audio('https://actions.google.com/sounds/v1/emergency/beeps_high_pitch.ogg');
-
-    function preloadAudios() {
-      audioReady.load();
-      audioSet.load();
-      audioGo.load();
+    // Generador de so intern (Funciona SEMPRE en qualsevol mòbil)
+    function produceSound(frequency, duration, type = 'sine') {
+      if (!audioCtx) return;
+      
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+      
+      gain.gain.setValueAtTime(0.8, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+      
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
     }
 
     // Inicialitzar la càmera frontal
     async function initCamera() {
-      preloadAudios();
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
@@ -101,10 +110,10 @@
     }
 
     function drawCanvas() {
-      // 1. Dibuixar imatge de la càmera
+      // 1. Dibuixar vídeo de la càmera
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
-      // 2. Dibuixar línia de meta (visual)
+      // 2. Dibuixar línia vermella al centre
       ctx.strokeStyle = "#FF0000";
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -112,7 +121,7 @@
       ctx.lineTo(finishLineX, canvas.height);
       ctx.stroke();
 
-      // 3. Cronòmetre
+      // 3. Cronòmetre en directe
       if (isRacing) {
         const now = performance.now();
         const diff = new Date(now - raceStartTime);
@@ -122,7 +131,7 @@
         elapsedTime = `${m}:${s}.${ms}`;
       }
 
-      // 4. Interfície de text
+      // 4. Interfície de text sobre el vídeo
       ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
       ctx.fillRect(10, 10, 310, 75);
 
@@ -138,9 +147,14 @@
     }
 
     startBtn.addEventListener('click', () => {
-      // Forçar activació d'àudio per la gestió de permisos del mòbil
-      audioReady.play().then(() => audioReady.pause());
-      
+      // Activar el xip d'àudio del mòbil al fer clic
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+
       startBtn.disabled = true;
       stopBtn.disabled = false;
       recordedChunks = [];
@@ -164,31 +178,27 @@
     }
 
     function triggerProStart() {
-      // 1. READY (Text i Veu exactament a la vegada)
+      // 1. READY (Senyal sonor 1)
       statusText = "READY";
-      audioReady.currentTime = 0;
-      audioReady.play();
+      produceSound(440, 0.5, 'sine'); // So greu 440Hz
 
       setTimeout(() => {
-        // 2. SET (Text i Veu exactament a la vegada desprès de 5s)
+        // 2. SET (Senyal sonor 2) passats 5 segons
         statusText = "SET";
-        audioSet.currentTime = 0;
-        audioSet.play();
+        produceSound(660, 0.5, 'sine'); // So agut 660Hz
 
         const randomDelay = Math.random() * 2000 + 1000; // Entre 1s i 3s
 
         setTimeout(() => {
-          // 3. GO! (So + Text + Cronòmetre + Gravació 100% Simultanis)
-          audioGo.currentTime = 0;
-          audioGo.play();
-          
+          // 3. GO! (Pistolada + Cronòmetre + Iniciar gravació)
+          produceSound(150, 0.6, 'sawtooth'); // So tipus pistolada
           raceStartTime = performance.now();
           isRacing = true;
           statusText = "GO!";
 
           startRecording();
 
-          // S'atura automàticament passats 10 segons
+          // Aturar la gravació automàticament passats 10 segons exactes
           setTimeout(() => {
             stopRace();
           }, 10000);
